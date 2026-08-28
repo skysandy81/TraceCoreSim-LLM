@@ -1,0 +1,13 @@
+[project]
+name = "tracecoresim-llm"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "ipykernel>=7.3.0",
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.2",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

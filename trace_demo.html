@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoreSimLLM Trace Demo</title>
+  <style>
+    /* 颜色变量集中定义，浏览器根据 light/dark 模式自动选择。
+       Color variables are centralized and resolved by browser light/dark mode. */
+    :root {
+      color-scheme: light dark;
+      --bg: light-dark(#f7f8fb, #111318);
+      --fg: light-dark(#171a21, #eef1f6);
+      --muted: light-dark(#5c6472, #a9b1c0);
+      --panel: light-dark(#ffffff, #191d25);
+      --panel-2: light-dark(#eef5ff, #202837);
+      --border: light-dark(#d7dce5, #343b49);
+      --accent: light-dark(#1d6fd6, #76a9ff);
+      --green: light-dark(#1b7f5f, #72d1b0);
+      --red: light-dark(#b42318, #ff8a80);
+    }
+    /* 基础排版保持克制，重点放在数值表格和公式上。
+       Base typography is restrained so formulas and numeric tables stay prominent. */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1, h2, h3 { margin: 0; font-weight: 500; }
+    h1 { font-size: 24px; }
+    h2 { font-size: 18px; }
+    h3 { font-size: 15px; }
+    p { margin: 0; color: var(--muted); }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
+    /* 顶部区域展示模型尺寸元信息，帮助理解每个张量 shape。
+       The top area shows model-shape metadata used to interpret tensor shapes. */
+    .top {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .stat {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .stat strong {
+      display: block;
+      margin-top: 4px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    /* 左侧是步骤导航，右侧是当前步骤的公式、解释和实际数值。
+       The left side is step navigation; the right side shows formula, explanation, and values. */
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .steps {
+      display: grid;
+      gap: 8px;
+    }
+    button {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--fg);
+      padding: 10px 12px;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+    }
+    button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--panel-2);
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .controls button {
+      text-align: center;
+    }
+    .detail {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 16px;
+      min-width: 0;
+    }
+    /* 矩阵表格使用等宽数字，保证小数列对齐，适合观察计算过程。
+       Matrix tables use tabular numbers so decimal columns align for computation tracing. */
+    .formula {
+      margin: 12px 0;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--fg);
+      overflow-wrap: anywhere;
+    }
+    .values {
+      display: grid;
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .calc-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .calc-block {
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .calc-formula {
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .section-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 14px;
+      text-transform: uppercase;
+    }
+    .value-block {
+      display: grid;
+      gap: 6px;
+    }
+    .value-head {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .shape {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .note {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 6px 8px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child {
+      color: var(--muted);
+      text-align: left;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .token-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .token {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: var(--panel-2);
+      font-variant-numeric: tabular-nums;
+    }
+    /* 概率候选用条形图表达，直观看出 softmax 后的相对大小。
+       Probability candidates use bars to make softmax differences visible. */
+    .bar-list {
+      display: grid;
+      gap: 8px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 86px minmax(80px, 1fr) 96px;
+      gap: 8px;
+      align-items: center;
+      font-size: 13px;
+    }
+    .bar {
+      height: 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .bar span {
+      display: block;
+      height: 100%;
+      background: var(--green);
+      width: calc(var(--w) * 100%);
+    }
+    /* 窄屏下改为单列，让表格可以横向滚动而不是互相挤压。
+       On narrow screens the layout becomes single-column and tables scroll horizontally. */
+    @media (max-width: 760px) {
+      main { padding: 16px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 460px) {
+      .stats, .steps { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 70px minmax(60px, 1fr); }
+      .bar-row .prob { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="top">
+    <h1>CoreSimLLM Trace Demo</h1>
+    <p>A deterministic d_model=8 forward pass with rounded numeric tensors.</p>
+    <div class="stats" id="stats"></div>
+  </section>
+  <section class="layout">
+    <aside>
+      <div class="steps" id="stepList"></div>
+      <div class="controls">
+        <button type="button" id="prevBtn">Previous</button>
+        <button type="button" id="nextBtn">Next</button>
+      </div>
+    </aside>
+    <section class="detail" id="detail" aria-live="polite"></section>
+  </section>
+</main>
+<script>
+// trace 是 Python 预计算出的完整前向传播数值，不在浏览器里重新计算模型。
+// trace contains Python-precomputed forward-pass values; the browser only renders them.
+const trace = {"meta": {"parameter_style": "handcrafted small values", "d_model": 8, "n_heads": 2, "n_kv_heads": 1, "head_dim": 4, "d_ff": 8, "tokens": ["<bos>", "I", "like"], "vocab": ["<bos>", "I", "like", "coding", ".", "fun"]}, "steps": [{"title": "Tokenize", "formula": "tokens -> token_ids", "values": [{"name": "tokens", "shape": [], "value": ["<bos>", "I", "like"]}, {"name": "token_ids", "shape": [3], "value": [0.0, 1.0, 2.0], "note": "These integer ids index the embedding table."}], "detail": "The demo uses a compact token vocabulary so every following tensor stays readable.", "calculation": [{"title": "Vocabulary lookup", "formula": "token_id = vocab_index[token]", "values": [{"name": "token id mapping", "shape": [], "value": ["<bos> -> 0", "I -> 1", "like -> 2", "coding -> 3", ". -> 4", "fun -> 5"]}, {"name": "lookup path", "shape": [], "value": ["<bos> -> 0", "I -> 1", "like -> 2"]}], "detail": "Tokenization converts text symbols into integer indices before any neural math starts."}]}, {"title": "Embedding lookup", "formula": "X = E[token_ids]", "values": [{"name": "embedding table E", "shape": [6, 8], "value": [[0.8, 0.1, 0.0, 0.0, 0.2, 0.0, 0.1, 0.0], [0.1, 0.9, 0.2, 0.0, 0.0, 0.1, 0.0, 0.1], [0.0, 0.2, 0.9, 0.1, 0.0, 0.0, 0.2, 0.1], [0.0, 0.1, 0.2, 0.9, 0.1, 0.0, 0.0, 0.2], [0.1, 0.0, 0.0, 0.2, 0.8, 0.1, 0.0, 0.0], [0.0, 0.0, 0.2, 0.3, 0.1, 0.8, 0.2, 0.0]]}, {"name": "input embeddings X", "shape": [3, 8], "value": [[0.8, 0.1, 0.0, 0.0, 0.2, 0.0, 0.1, 0.0], [0.1, 0.9, 0.2, 0.0, 0.0, 0.1, 0.0, 0.1], [0.0, 0.2, 0.9, 0.1, 0.0, 0.0, 0.2, 0.1]], "note": "Shape is sequence length by d_model."}], "detail": "Each token id selects one 8-dimensional row from the embedding table.", "calculation": [{"title": "Gather rows from E", "formula": "X[t] = E[token_ids[t]]", "values": [{"name": "selected rows", "shape": [], "value": ["X[0] = E[0] for token <bos>", "X[1] = E[1] for token I", "X[2] = E[2] for token like"]}, {"name": "X", "shape": [3, 8], "value": [[0.8, 0.1, 0.0, 0.0, 0.2, 0.0, 0.1, 0.0], [0.1, 0.9, 0.2, 0.0, 0.0, 0.1, 0.0, 0.1], [0.0, 0.2, 0.9, 0.1, 0.0, 0.0, 0.2, 0.1]], "note": "This matrix is the first hidden-state matrix used by the decoder block."}]}]}, {"title": "Pre-attention RMSNorm", "formula": "x_norm = X / sqrt(mean(X^2) + eps)", "values": [{"name": "input X", "shape": [3, 8], "value": [[0.8, 0.1, 0.0, 0.0, 0.2, 0.0, 0.1, 0.0], [0.1, 0.9, 0.2, 0.0, 0.0, 0.1, 0.0, 0.1], [0.0, 0.2, 0.9, 0.1, 0.0, 0.0, 0.2, 0.1]]}, {"name": "RMS denominator", "shape": [3, 1], "value": [[0.296], [0.332], [0.337]]}, {"name": "x_norm", "shape": [3, 8], "value": [[2.704, 0.338, 0.0, 0.0, 0.676, 0.0, 0.338, 0.0], [0.301, 2.713, 0.603, 0.0, 0.0, 0.301, 0.0, 0.301], [0.0, 0.593, 2.668, 0.296, 0.0, 0.0, 0.593, 0.296]]}], "detail": "RMSNorm rescales each token vector while preserving its direction.", "calculation": [{"title": "Square every feature", "formula": "X^2", "values": [{"name": "X^2", "shape": [3, 8], "value": [[0.64, 0.01, 0.0, 0.0, 0.04, 0.0, 0.01, 0.0], [0.01, 0.81, 0.04, 0.0, 0.0, 0.01, 0.0, 0.01], [0.0, 0.04, 0.81, 0.01, 0.0, 0.0, 0.04, 0.01]]}]}, {"title": "Average squared features per token", "formula": "mean_square = mean(X^2, axis=-1)", "values": [{"name": "mean_square", "shape": [3, 1], "value": [[0.088], [0.11], [0.114]]}]}, {"title": "Divide by the RMS denominator", "formula": "x_norm = X / sqrt(mean_square + 1e-5)", "values": [{"name": "sqrt(mean_square + 1e-5)", "shape": [3, 1], "value": [[0.296], [0.332], [0.337]]}, {"name": "x_norm", "shape": [3, 8], "value": [[2.704, 0.338, 0.0, 0.0, 0.676, 0.0, 0.338, 0.0], [0.301, 2.713, 0.603, 0.0, 0.0, 0.301, 0.0, 0.301], [0.0, 0.593, 2.668, 0.296, 0.0, 0.0, 0.593, 0.296]]}]}]}, {"title": "Q/K/V projections", "formula": "Q = x_norm Wq, K = x_norm Wk, V = x_norm Wv", "values": [{"name": "Q raw", "shape": [3, 8], "value": [[1.623, 0.203, 0.0, 0.0, 0.406, 0.0, 0.203, 0.0], [0.181, 1.628, 0.362, 0.0, 0.0, 0.181, 0.0, 0.181], [0.0, 0.356, 1.601, 0.178, 0.0, 0.0, 0.356, 0.178]]}, {"name": "K raw", "shape": [3, 4], "value": [[1.758, 0.203, 0.338, 0.034], [0.241, 1.688, 0.392, 0.332], [0.267, 0.385, 1.72, 0.296]]}, {"name": "V raw", "shape": [3, 4], "value": [[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]]}, {"name": "Q reshaped", "shape": [2, 3, 4], "value": [[[1.623, 0.203, 0.0, 0.0], [0.181, 1.628, 0.362, 0.0], [0.0, 0.356, 1.601, 0.178]], [[0.406, 0.0, 0.203, 0.0], [0.0, 0.181, 0.0, 0.181], [0.0, 0.0, 0.356, 0.178]]], "note": "Two query heads, each with four dimensions."}, {"name": "K reshaped", "shape": [1, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [0.241, 1.688, 0.392, 0.332], [0.267, 0.385, 1.72, 0.296]]], "note": "One shared KV head for grouped-query attention."}, {"name": "V reshaped", "shape": [1, 3, 4], "value": [[[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]]]}], "detail": "GQA keeps two query heads but only one K/V head, then repeats K/V for attention.", "calculation": [{"title": "Projection inputs and weights", "formula": "Q_raw = x_norm Wq; K_raw = x_norm Wk; V_raw = x_norm Wv", "values": [{"name": "input x_norm", "shape": [3, 8], "value": [[2.704, 0.338, 0.0, 0.0, 0.676, 0.0, 0.338, 0.0], [0.301, 2.713, 0.603, 0.0, 0.0, 0.301, 0.0, 0.301], [0.0, 0.593, 2.668, 0.296, 0.0, 0.0, 0.593, 0.296]]}, {"name": "Wq", "shape": [8, 8], "value": [[0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6]]}, {"name": "Wk", "shape": [8, 4], "value": [[0.6, 0.0, 0.1, 0.0], [0.0, 0.6, 0.0, 0.1], [0.1, 0.0, 0.6, 0.0], [0.0, 0.1, 0.0, 0.6], [0.2, 0.0, 0.0, 0.0], [0.0, 0.2, 0.0, 0.0], [0.0, 0.0, 0.2, 0.0], [0.0, 0.0, 0.0, 0.2]]}, {"name": "Wv", "shape": [8, 4], "value": [[0.5, 0.0, 0.0, 0.1], [0.0, 0.5, 0.1, 0.0], [0.1, 0.0, 0.5, 0.0], [0.0, 0.1, 0.0, 0.5], [0.2, 0.0, 0.0, 0.0], [0.0, 0.2, 0.0, 0.0], [0.0, 0.0, 0.2, 0.0], [0.0, 0.0, 0.0, 0.2]]}]}, {"title": "One dot-product example", "formula": "Q_raw[0,0] = sum_i x_norm[0,i] * Wq[i,0]", "values": [{"name": "elementwise products", "shape": [8], "value": [1.623, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}, {"name": "Q_raw[0,0]", "shape": [1], "value": [1.623]}], "detail": "The same dot-product pattern is repeated for every row and output column."}, {"title": "Reshape into attention heads", "formula": "[seq, d_model] -> [n_heads, seq, head_dim]", "values": [{"name": "Q_raw", "shape": [3, 8], "value": [[1.623, 0.203, 0.0, 0.0, 0.406, 0.0, 0.203, 0.0], [0.181, 1.628, 0.362, 0.0, 0.0, 0.181, 0.0, 0.181], [0.0, 0.356, 1.601, 0.178, 0.0, 0.0, 0.356, 0.178]]}, {"name": "Q reshaped", "shape": [2, 3, 4], "value": [[[1.623, 0.203, 0.0, 0.0], [0.181, 1.628, 0.362, 0.0], [0.0, 0.356, 1.601, 0.178]], [[0.406, 0.0, 0.203, 0.0], [0.0, 0.181, 0.0, 0.181], [0.0, 0.0, 0.356, 0.178]]]}, {"name": "K reshaped", "shape": [1, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [0.241, 1.688, 0.392, 0.332], [0.267, 0.385, 1.72, 0.296]]]}, {"name": "V reshaped", "shape": [1, 3, 4], "value": [[[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]]]}]}]}, {"title": "RoPE position rotation", "formula": "RoPE rotates every even/odd feature pair by token position", "values": [{"name": "Q after RoPE", "shape": [2, 3, 4], "value": [[[1.623, 0.203, 0.0, 0.0], [-1.272, 1.032, 0.362, 0.004], [-0.324, -0.148, 1.597, 0.21]], [[0.406, 0.0, 0.203, 0.0], [-0.152, 0.098, -0.002, 0.181], [-0.0, 0.0, 0.352, 0.185]]]}, {"name": "K after RoPE", "shape": [1, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [-1.29, 1.115, 0.389, 0.336], [-0.462, 0.082, 1.713, 0.331]]]}], "detail": "The first token is barely rotated; later tokens receive position-dependent rotations.", "calculation": [{"title": "Build RoPE angles", "formula": "freq[pos, pair] = pos * 10000^(-pair/(head_dim/2))", "values": [{"name": "positions", "shape": [3], "value": [0.0, 1.0, 2.0]}, {"name": "theta", "shape": [2], "value": [1.0, 0.01]}, {"name": "freqs", "shape": [3, 2], "value": [[0.0, 0.0], [1.0, 0.01], [2.0, 0.02]]}, {"name": "cos(freqs)", "shape": [3, 2], "value": [[1.0, 1.0], [0.54, 1.0], [-0.416, 1.0]]}, {"name": "sin(freqs)", "shape": [3, 2], "value": [[0.0, 0.0], [0.841, 0.01], [0.909, 0.02]]}]}, {"title": "Rotate even/odd feature pairs", "formula": "even' = even*cos - odd*sin; odd' = even*sin + odd*cos", "values": [{"name": "Q before RoPE", "shape": [2, 3, 4], "value": [[[1.623, 0.203, 0.0, 0.0], [0.181, 1.628, 0.362, 0.0], [0.0, 0.356, 1.601, 0.178]], [[0.406, 0.0, 0.203, 0.0], [0.0, 0.181, 0.0, 0.181], [0.0, 0.0, 0.356, 0.178]]]}, {"name": "Q after RoPE", "shape": [2, 3, 4], "value": [[[1.623, 0.203, 0.0, 0.0], [-1.272, 1.032, 0.362, 0.004], [-0.324, -0.148, 1.597, 0.21]], [[0.406, 0.0, 0.203, 0.0], [-0.152, 0.098, -0.002, 0.181], [-0.0, 0.0, 0.352, 0.185]]]}, {"name": "K before RoPE", "shape": [1, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [0.241, 1.688, 0.392, 0.332], [0.267, 0.385, 1.72, 0.296]]]}, {"name": "K after RoPE", "shape": [1, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [-1.29, 1.115, 0.389, 0.336], [-0.462, 0.082, 1.713, 0.331]]]}]}]}, {"title": "Causal attention", "formula": "softmax((Q K^T / sqrt(head_dim)) + causal_mask)", "values": [{"name": "causal mask", "shape": [3, 3], "value": [[0.0, -1000000000.0, -1000000000.0], [0.0, 0.0, -1000000000.0], [0.0, 0.0, 0.0]], "note": "Large negative values block future tokens."}, {"name": "scores before mask", "shape": [2, 3, 3], "value": [[[1.447, -0.934, -0.366], [-0.952, 1.467, 0.647], [-0.026, 0.472, 1.472]], [[0.391, -0.222, 0.08], [-0.121, 0.183, 0.068], [0.063, 0.099, 0.332]]]}, {"name": "scores after mask", "shape": [2, 3, 3], "value": [[[1.447, -1000000000.934, -1000000000.366], [-0.952, 1.467, -999999999.353], [-0.026, 0.472, 1.472]], [[0.391, -1000000000.222, -999999999.92], [-0.121, 0.183, -999999999.932], [0.063, 0.099, 0.332]]]}, {"name": "attention weights", "shape": [2, 3, 3], "value": [[[1.0, 0.0, 0.0], [0.082, 0.918, 0.0], [0.141, 0.231, 0.628]], [[1.0, 0.0, 0.0], [0.425, 0.575, 0.0], [0.299, 0.31, 0.391]]]}], "detail": "Each token can attend to itself and previous tokens, but not future tokens.", "calculation": [{"title": "Repeat shared K/V heads for GQA", "formula": "K_attn = repeat(K, n_heads / n_kv_heads); V_attn = repeat(V, ...)", "values": [{"name": "K after RoPE", "shape": [1, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [-1.29, 1.115, 0.389, 0.336], [-0.462, 0.082, 1.713, 0.331]]]}, {"name": "K_attn", "shape": [2, 3, 4], "value": [[[1.758, 0.203, 0.338, 0.034], [-1.29, 1.115, 0.389, 0.336], [-0.462, 0.082, 1.713, 0.331]], [[1.758, 0.203, 0.338, 0.034], [-1.29, 1.115, 0.389, 0.336], [-0.462, 0.082, 1.713, 0.331]]]}, {"name": "V_attn", "shape": [2, 3, 4], "value": [[[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]], [[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]]]}], "detail": "This keeps two query heads but shares one K/V head, like grouped-query attention."}, {"title": "Scaled dot-product scores", "formula": "scores_before_mask = Q_rot K_attn^T / sqrt(head_dim)", "values": [{"name": "Q_rot", "shape": [2, 3, 4], "value": [[[1.623, 0.203, 0.0, 0.0], [-1.272, 1.032, 0.362, 0.004], [-0.324, -0.148, 1.597, 0.21]], [[0.406, 0.0, 0.203, 0.0], [-0.152, 0.098, -0.002, 0.181], [-0.0, 0.0, 0.352, 0.185]]]}, {"name": "K_attn^T", "shape": [2, 4, 3], "value": [[[1.758, -1.29, -0.462], [0.203, 1.115, 0.082], [0.338, 0.389, 1.713], [0.034, 0.336, 0.331]], [[1.758, -1.29, -0.462], [0.203, 1.115, 0.082], [0.338, 0.389, 1.713], [0.034, 0.336, 0.331]]]}, {"name": "sqrt(head_dim)", "shape": [1], "value": [2.0]}, {"name": "scores before mask", "shape": [2, 3, 3], "value": [[[1.447, -0.934, -0.366], [-0.952, 1.467, 0.647], [-0.026, 0.472, 1.472]], [[0.391, -0.222, 0.08], [-0.121, 0.183, 0.068], [0.063, 0.099, 0.332]]]}]}, {"title": "Add the causal mask", "formula": "masked_scores = scores_before_mask + causal_mask", "values": [{"name": "causal mask", "shape": [3, 3], "value": [[0.0, -1000000000.0, -1000000000.0], [0.0, 0.0, -1000000000.0], [0.0, 0.0, 0.0]], "note": "Future columns contain a very large negative number."}, {"name": "masked attention scores", "shape": [2, 3, 3], "value": [[[1.447, -1000000000.934, -1000000000.366], [-0.952, 1.467, -999999999.353], [-0.026, 0.472, 1.472]], [[0.391, -1000000000.222, -999999999.92], [-0.121, 0.183, -999999999.932], [0.063, 0.099, 0.332]]]}]}, {"title": "Stable softmax, row by row", "formula": "softmax(x)_i = exp(x_i - max(x)) / sum_j exp(x_j - max(x))", "values": [{"name": "masked attention scores", "shape": [2, 3, 3], "value": [[[1.447, -1000000000.934, -1000000000.366], [-0.952, 1.467, -999999999.353], [-0.026, 0.472, 1.472]], [[0.391, -1000000000.222, -999999999.92], [-0.121, 0.183, -999999999.932], [0.063, 0.099, 0.332]]], "note": "Softmax is applied row-wise along the last axis."}, {"name": "max(x)", "shape": [2, 3, 1], "value": [[[1.447], [1.467], [1.472]], [[0.391], [0.183], [0.332]]], "note": "One max value is kept for each row/vector."}, {"name": "x - max(x)", "shape": [2, 3, 3], "value": [[[0.0, -1000000002.381, -1000000001.813], [-2.419, 0.0, -1000000000.821], [-1.497, -1.0, 0.0]], [[0.0, -1000000000.613, -1000000000.311], [-0.304, 0.0, -1000000000.115], [-0.27, -0.233, 0.0]]], "note": "This improves numerical stability."}, {"name": "exp(x - max(x))", "shape": [2, 3, 3], "value": [[[1.0, 0.0, 0.0], [0.089, 1.0, 0.0], [0.224, 0.368, 1.0]], [[1.0, 0.0, 0.0], [0.738, 1.0, 0.0], [0.764, 0.792, 1.0]]]}, {"name": "sum(exp(...))", "shape": [2, 3, 1], "value": [[[1.0], [1.089], [1.592]], [[1.0], [1.738], [2.556]]]}, {"name": "softmax output", "shape": [2, 3, 3], "value": [[[1.0, 0.0, 0.0], [0.0817, 0.9183, 0.0], [0.1406, 0.2312, 0.6283]], [[1.0, 0.0, 0.0], [0.4246, 0.5754, 0.0], [0.2988, 0.31, 0.3912]]]}], "detail": "Rows with masked future tokens get exp(very negative) = 0, so future attention becomes 0."}]}, {"title": "Attention output and residual", "formula": "attention_out = concat(weights V) Wo; x = X + attention_out", "values": [{"name": "context per head", "shape": [2, 3, 4], "value": [[[1.487, 0.169, 0.101, 0.27], [0.315, 1.315, 0.534, 0.105], [0.425, 0.556, 1.097, 0.189]], [[1.487, 0.169, 0.101, 0.27], [0.753, 0.887, 0.373, 0.167], [0.614, 0.617, 0.799, 0.19]]]}, {"name": "concatenated context", "shape": [3, 8], "value": [[1.487, 0.169, 0.101, 0.27, 1.487, 0.169, 0.101, 0.27], [0.315, 1.315, 0.534, 0.105, 0.753, 0.887, 0.373, 0.167], [0.425, 0.556, 1.097, 0.189, 0.614, 0.617, 0.799, 0.19]]}, {"name": "attention output", "shape": [3, 8], "value": [[0.521, 0.059, 0.035, 0.095, 0.521, 0.059, 0.035, 0.095], [0.11, 0.46, 0.187, 0.037, 0.264, 0.31, 0.13, 0.058], [0.149, 0.195, 0.384, 0.066, 0.215, 0.216, 0.28, 0.067]]}, {"name": "residual after attention", "shape": [3, 8], "value": [[1.321, 0.159, 0.035, 0.095, 0.721, 0.059, 0.135, 0.095], [0.21, 1.36, 0.387, 0.037, 0.264, 0.41, 0.13, 0.158], [0.149, 0.395, 1.284, 0.166, 0.215, 0.216, 0.48, 0.167]]}], "detail": "The residual path carries the original token signal forward.", "calculation": [{"title": "Mix value vectors with attention weights", "formula": "context = attention_weights V_attn", "values": [{"name": "attention weights", "shape": [2, 3, 3], "value": [[[1.0, 0.0, 0.0], [0.082, 0.918, 0.0], [0.141, 0.231, 0.628]], [[1.0, 0.0, 0.0], [0.425, 0.575, 0.0], [0.299, 0.31, 0.391]]]}, {"name": "V_attn", "shape": [2, 3, 4], "value": [[[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]], [[1.487, 0.169, 0.101, 0.27], [0.211, 1.417, 0.573, 0.09], [0.267, 0.326, 1.512, 0.208]]]}, {"name": "context per head", "shape": [2, 3, 4], "value": [[[1.487, 0.169, 0.101, 0.27], [0.315, 1.315, 0.534, 0.105], [0.425, 0.556, 1.097, 0.189]], [[1.487, 0.169, 0.101, 0.27], [0.753, 0.887, 0.373, 0.167], [0.614, 0.617, 0.799, 0.19]]]}]}, {"title": "Concatenate heads and project back to d_model", "formula": "attention_out = concat(context_heads) Wo", "values": [{"name": "concatenated context", "shape": [3, 8], "value": [[1.487, 0.169, 0.101, 0.27, 1.487, 0.169, 0.101, 0.27], [0.315, 1.315, 0.534, 0.105, 0.753, 0.887, 0.373, 0.167], [0.425, 0.556, 1.097, 0.189, 0.614, 0.617, 0.799, 0.19]]}, {"name": "Wo", "shape": [8, 8], "value": [[0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.35, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35]]}, {"name": "attention output", "shape": [3, 8], "value": [[0.521, 0.059, 0.035, 0.095, 0.521, 0.059, 0.035, 0.095], [0.11, 0.46, 0.187, 0.037, 0.264, 0.31, 0.13, 0.058], [0.149, 0.195, 0.384, 0.066, 0.215, 0.216, 0.28, 0.067]]}]}, {"title": "Residual addition", "formula": "x_after_attn = X + attention_out", "values": [{"name": "original X", "shape": [3, 8], "value": [[0.8, 0.1, 0.0, 0.0, 0.2, 0.0, 0.1, 0.0], [0.1, 0.9, 0.2, 0.0, 0.0, 0.1, 0.0, 0.1], [0.0, 0.2, 0.9, 0.1, 0.0, 0.0, 0.2, 0.1]]}, {"name": "attention output", "shape": [3, 8], "value": [[0.521, 0.059, 0.035, 0.095, 0.521, 0.059, 0.035, 0.095], [0.11, 0.46, 0.187, 0.037, 0.264, 0.31, 0.13, 0.058], [0.149, 0.195, 0.384, 0.066, 0.215, 0.216, 0.28, 0.067]]}, {"name": "x_after_attn", "shape": [3, 8], "value": [[1.321, 0.159, 0.035, 0.095, 0.721, 0.059, 0.135, 0.095], [0.21, 1.36, 0.387, 0.037, 0.264, 0.41, 0.13, 0.158], [0.149, 0.395, 1.284, 0.166, 0.215, 0.216, 0.48, 0.167]]}], "detail": "The plus sign is element-wise and keeps the original embedding signal available."}]}, {"title": "SwiGLU feed-forward block", "formula": "ffn = (SiLU(x_norm W1) * (x_norm W3)) W2; x = x + ffn", "values": [{"name": "x_norm2", "shape": [3, 8], "value": [[2.447, 0.295, 0.066, 0.175, 1.335, 0.11, 0.251, 0.175], [0.39, 2.523, 0.718, 0.068, 0.489, 0.761, 0.242, 0.294], [0.284, 0.752, 2.446, 0.317, 0.409, 0.412, 0.914, 0.317]]}, {"name": "gate pre-activation", "shape": [3, 8], "value": [[1.346, 0.162, 0.036, 0.096, 0.734, 0.06, 0.138, 0.096], [0.215, 1.388, 0.395, 0.038, 0.269, 0.419, 0.133, 0.162], [0.156, 0.414, 1.345, 0.174, 0.225, 0.226, 0.503, 0.174]]}, {"name": "SiLU gate", "shape": [3, 8], "value": [[1.068, 0.088, 0.018, 0.051, 0.496, 0.031, 0.074, 0.051], [0.119, 1.11, 0.236, 0.019, 0.152, 0.253, 0.071, 0.087], [0.084, 0.249, 1.067, 0.095, 0.125, 0.126, 0.313, 0.095]]}, {"name": "up projection", "shape": [3, 8], "value": [[1.101, 0.133, 0.03, 0.079, 0.601, 0.049, 0.113, 0.079], [0.176, 1.135, 0.323, 0.031, 0.22, 0.343, 0.109, 0.132], [0.128, 0.338, 1.1, 0.143, 0.184, 0.185, 0.411, 0.143]]}, {"name": "gated hidden", "shape": [3, 8], "value": [[1.176, 0.012, 0.001, 0.004, 0.298, 0.002, 0.008, 0.004], [0.021, 1.26, 0.076, 0.001, 0.034, 0.087, 0.008, 0.012], [0.011, 0.084, 1.174, 0.013, 0.023, 0.023, 0.129, 0.014]]}, {"name": "ffn output", "shape": [3, 8], "value": [[0.353, 0.003, 0.0, 0.001, 0.089, 0.0, 0.003, 0.001], [0.006, 0.378, 0.023, 0.0, 0.01, 0.026, 0.002, 0.003], [0.003, 0.025, 0.352, 0.004, 0.007, 0.007, 0.039, 0.004]]}, {"name": "residual after FFN", "shape": [3, 8], "value": [[1.673, 0.163, 0.036, 0.096, 0.81, 0.06, 0.138, 0.096], [0.217, 1.738, 0.41, 0.037, 0.274, 0.436, 0.133, 0.162], [0.152, 0.42, 1.636, 0.17, 0.222, 0.223, 0.518, 0.171]]}], "detail": "SwiGLU gates the hidden features before projecting them back to d_model.", "calculation": [{"title": "Normalize the attention residual", "formula": "x_norm2 = x_after_attn / sqrt(mean(x_after_attn^2) + eps)", "values": [{"name": "x_after_attn", "shape": [3, 8], "value": [[1.321, 0.159, 0.035, 0.095, 0.721, 0.059, 0.135, 0.095], [0.21, 1.36, 0.387, 0.037, 0.264, 0.41, 0.13, 0.158], [0.149, 0.395, 1.284, 0.166, 0.215, 0.216, 0.48, 0.167]]}, {"name": "x_after_attn^2", "shape": [3, 8], "value": [[1.744, 0.025, 0.001, 0.009, 0.519, 0.003, 0.018, 0.009], [0.044, 1.85, 0.15, 0.001, 0.069, 0.168, 0.017, 0.025], [0.022, 0.156, 1.648, 0.028, 0.046, 0.047, 0.23, 0.028]]}, {"name": "mean square", "shape": [3, 1], "value": [[0.291], [0.291], [0.276]]}, {"name": "RMS denominator", "shape": [3, 1], "value": [[0.54], [0.539], [0.525]]}, {"name": "x_norm2", "shape": [3, 8], "value": [[2.447, 0.295, 0.066, 0.175, 1.335, 0.11, 0.251, 0.175], [0.39, 2.523, 0.718, 0.068, 0.489, 0.761, 0.242, 0.294], [0.284, 0.752, 2.446, 0.317, 0.409, 0.412, 0.914, 0.317]]}]}, {"title": "Compute the two FFN projections", "formula": "gate_pre = x_norm2 W1 + b1; up = x_norm2 W3 + b3", "values": [{"name": "W1", "shape": [8, 8], "value": [[0.55, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.55, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.55, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.55, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.55, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.55, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.55, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.55]]}, {"name": "W3", "shape": [8, 8], "value": [[0.45, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.45, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.45, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.45, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.45, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.45, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.45, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.45]]}, {"name": "gate_pre", "shape": [3, 8], "value": [[1.346, 0.162, 0.036, 0.096, 0.734, 0.06, 0.138, 0.096], [0.215, 1.388, 0.395, 0.038, 0.269, 0.419, 0.133, 0.162], [0.156, 0.414, 1.345, 0.174, 0.225, 0.226, 0.503, 0.174]]}, {"name": "up", "shape": [3, 8], "value": [[1.101, 0.133, 0.03, 0.079, 0.601, 0.049, 0.113, 0.079], [0.176, 1.135, 0.323, 0.031, 0.22, 0.343, 0.109, 0.132], [0.128, 0.338, 1.1, 0.143, 0.184, 0.185, 0.411, 0.143]]}]}, {"title": "Apply SiLU gate and multiply", "formula": "SiLU(z) = z * sigmoid(z); hidden = SiLU(gate_pre) * up", "values": [{"name": "sigmoid(gate_pre)", "shape": [3, 8], "value": [[0.793, 0.54, 0.509, 0.524, 0.676, 0.515, 0.534, 0.524], [0.553, 0.8, 0.597, 0.509, 0.567, 0.603, 0.533, 0.54], [0.539, 0.602, 0.793, 0.543, 0.556, 0.556, 0.623, 0.544]]}, {"name": "SiLU gate", "shape": [3, 8], "value": [[1.068, 0.088, 0.018, 0.051, 0.496, 0.031, 0.074, 0.051], [0.119, 1.11, 0.236, 0.019, 0.152, 0.253, 0.071, 0.087], [0.084, 0.249, 1.067, 0.095, 0.125, 0.126, 0.313, 0.095]]}, {"name": "up", "shape": [3, 8], "value": [[1.101, 0.133, 0.03, 0.079, 0.601, 0.049, 0.113, 0.079], [0.176, 1.135, 0.323, 0.031, 0.22, 0.343, 0.109, 0.132], [0.128, 0.338, 1.1, 0.143, 0.184, 0.185, 0.411, 0.143]]}, {"name": "gated hidden", "shape": [3, 8], "value": [[1.176, 0.012, 0.001, 0.004, 0.298, 0.002, 0.008, 0.004], [0.021, 1.26, 0.076, 0.001, 0.034, 0.087, 0.008, 0.012], [0.011, 0.084, 1.174, 0.013, 0.023, 0.023, 0.129, 0.014]]}]}, {"title": "Project FFN output and add residual", "formula": "x_after_ffn = x_after_attn + hidden W2 + b2", "values": [{"name": "W2", "shape": [8, 8], "value": [[0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3]]}, {"name": "ffn output", "shape": [3, 8], "value": [[0.353, 0.003, 0.0, 0.001, 0.089, 0.0, 0.003, 0.001], [0.006, 0.378, 0.023, 0.0, 0.01, 0.026, 0.002, 0.003], [0.003, 0.025, 0.352, 0.004, 0.007, 0.007, 0.039, 0.004]]}, {"name": "x_after_ffn", "shape": [3, 8], "value": [[1.673, 0.163, 0.036, 0.096, 0.81, 0.06, 0.138, 0.096], [0.217, 1.738, 0.41, 0.037, 0.274, 0.436, 0.133, 0.162], [0.152, 0.42, 1.636, 0.17, 0.222, 0.223, 0.518, 0.171]]}]}]}, {"title": "Logits and next-token probabilities", "formula": "logits = final_hidden Wout; probs = softmax(logits)", "values": [{"name": "final hidden", "shape": [3, 8], "value": [[2.521, 0.245, 0.054, 0.144, 1.22, 0.09, 0.208, 0.144], [0.325, 2.611, 0.615, 0.056, 0.411, 0.655, 0.199, 0.243], [0.237, 0.654, 2.547, 0.265, 0.345, 0.347, 0.807, 0.265]]}, {"name": "logits", "shape": [3, 6], "value": [[1.504, 0.131, 0.092, 0.254, 1.022, 0.173], [0.245, 1.371, 0.316, 0.499, 0.356, 0.663], [0.187, 0.362, 1.233, 1.861, 0.319, 1.02]]}, {"name": "probabilities", "shape": [3, 6], "value": [[0.375, 0.095, 0.091, 0.108, 0.232, 0.099], [0.11, 0.339, 0.118, 0.142, 0.123, 0.167], [0.072, 0.086, 0.206, 0.386, 0.083, 0.166]]}, {"name": "top next-token candidates", "shape": [], "value": [{"token": "coding", "prob": 0.3862, "logit": 1.8612}, {"token": "like", "prob": 0.2061, "logit": 1.2331}, {"token": "fun", "prob": 0.1665, "logit": 1.0198}, {"token": "I", "prob": 0.0862, "logit": 0.3615}, {"token": ".", "prob": 0.0826, "logit": 0.3186}]}], "detail": "The next token is selected from the last row of probabilities.", "calculation": [{"title": "Final RMSNorm", "formula": "final_hidden = x_after_ffn / sqrt(mean(x_after_ffn^2) + eps)", "values": [{"name": "x_after_ffn", "shape": [3, 8], "value": [[1.673, 0.163, 0.036, 0.096, 0.81, 0.06, 0.138, 0.096], [0.217, 1.738, 0.41, 0.037, 0.274, 0.436, 0.133, 0.162], [0.152, 0.42, 1.636, 0.17, 0.222, 0.223, 0.518, 0.171]]}, {"name": "x_after_ffn^2", "shape": [3, 8], "value": [[2.8, 0.026, 0.001, 0.009, 0.656, 0.004, 0.019, 0.009], [0.047, 3.022, 0.168, 0.001, 0.075, 0.19, 0.018, 0.026], [0.023, 0.176, 2.677, 0.029, 0.049, 0.05, 0.269, 0.029]]}, {"name": "mean square", "shape": [3, 1], "value": [[0.441], [0.443], [0.413]]}, {"name": "RMS denominator", "shape": [3, 1], "value": [[0.664], [0.666], [0.642]]}, {"name": "final hidden", "shape": [3, 8], "value": [[2.521, 0.245, 0.054, 0.144, 1.22, 0.09, 0.208, 0.144], [0.325, 2.611, 0.615, 0.056, 0.411, 0.655, 0.199, 0.243], [0.237, 0.654, 2.547, 0.265, 0.345, 0.347, 0.807, 0.265]]}]}, {"title": "Project hidden states to vocabulary logits", "formula": "logits = final_hidden Wout", "values": [{"name": "final hidden", "shape": [3, 8], "value": [[2.521, 0.245, 0.054, 0.144, 1.22, 0.09, 0.208, 0.144], [0.325, 2.611, 0.615, 0.056, 0.411, 0.655, 0.199, 0.243], [0.237, 0.654, 2.547, 0.265, 0.345, 0.347, 0.807, 0.265]]}, {"name": "Wout", "shape": [8, 6], "value": [[0.5, 0.0, 0.0, 0.0, 0.1, 0.0], [0.0, 0.5, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.4, 0.5, 0.0, 0.2], [0.0, 0.0, 0.1, 0.7, 0.2, 0.3], [0.2, 0.0, 0.0, 0.0, 0.6, 0.0], [0.0, 0.1, 0.0, 0.0, 0.1, 0.7], [0.0, 0.0, 0.2, 0.4, 0.0, 0.2], [0.0, 0.0, 0.1, 0.3, 0.0, 0.1]]}, {"name": "logits", "shape": [3, 6], "value": [[1.504, 0.131, 0.092, 0.254, 1.022, 0.173], [0.245, 1.371, 0.316, 0.499, 0.356, 0.663], [0.187, 0.362, 1.233, 1.861, 0.319, 1.02]]}]}, {"title": "Stable softmax over vocabulary", "formula": "prob(token_i) = exp(logit_i - max(logits)) / sum_j exp(logit_j - max(logits))", "values": [{"name": "logits", "shape": [3, 6], "value": [[1.504, 0.131, 0.092, 0.254, 1.022, 0.173], [0.245, 1.371, 0.316, 0.499, 0.356, 0.663], [0.187, 0.362, 1.233, 1.861, 0.319, 1.02]], "note": "Softmax is applied row-wise along the last axis."}, {"name": "max(x)", "shape": [3, 1], "value": [[1.504], [1.371], [1.861]], "note": "One max value is kept for each row/vector."}, {"name": "x - max(x)", "shape": [3, 6], "value": [[0.0, -1.373, -1.413, -1.25, -0.482, -1.332], [-1.126, 0.0, -1.055, -0.872, -1.015, -0.708], [-1.674, -1.5, -0.628, 0.0, -1.543, -0.841]], "note": "This improves numerical stability."}, {"name": "exp(x - max(x))", "shape": [3, 6], "value": [[1.0, 0.253, 0.244, 0.286, 0.617, 0.264], [0.324, 1.0, 0.348, 0.418, 0.362, 0.493], [0.188, 0.223, 0.534, 1.0, 0.214, 0.431]]}, {"name": "sum(exp(...))", "shape": [3, 1], "value": [[2.665], [2.946], [2.589]]}, {"name": "softmax output", "shape": [3, 6], "value": [[0.3753, 0.0951, 0.0914, 0.1075, 0.2317, 0.0991], [0.1101, 0.3395, 0.1182, 0.142, 0.123, 0.1672], [0.0724, 0.0862, 0.2061, 0.3862, 0.0826, 0.1665]]}], "detail": "For generation, the model uses the last row because it predicts the token after the full prompt."}]}]};
+const stats = document.getElementById("stats");
+const stepList = document.getElementById("stepList");
+const detail = document.getElementById("detail");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+let active = 0;
+
+// 所有动态插入 HTML 的文本都经过转义，避免 token 文本破坏页面结构。
+// Every dynamic text value is escaped before insertion to preserve page structure.
+function esc(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+// 数值统一显示 3 位小数，与 Python 端 trace rounding 保持一致。
+// Numbers are shown with three decimals, matching Python-side trace rounding.
+function fmt(value) {
+  if (typeof value === "number") return value.toFixed(3);
+  return esc(value);
+}
+
+// 空 shape 用空字符串表示，标量或文本块不显示维度。
+// Empty shape is displayed as blank; scalar/text blocks do not show dimensions.
+function shapeLabel(shape) {
+  return shape && shape.length ? "[" + shape.join(", ") + "]" : "";
+}
+
+// 渲染 d_model、head 数等元信息，先给读者建立张量尺寸上下文。
+// Render d_model/head metadata first so tensor dimensions have context.
+function renderStats() {
+  const meta = trace.meta;
+  const items = [
+    ["d_model", meta.d_model],
+    ["heads", `${meta.n_heads} Q / ${meta.n_kv_heads} KV`],
+    ["head_dim", meta.head_dim],
+    ["d_ff", meta.d_ff],
+    ["params", meta.parameter_style],
+  ];
+  stats.innerHTML = items.map(([k, v]) => `
+    <div class="stat"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>
+  `).join("");
+}
+
+// 把任意嵌套数组压平成二维表行，例如 [head, row, col] 会显示为 head.row。
+// Flatten nested arrays into table rows, e.g. [head, row, col] becomes head.row.
+function flattenRows(value, prefix = "") {
+  if (!Array.isArray(value)) return [[prefix || "value", value]];
+  if (!Array.isArray(value[0])) {
+    return [[prefix || "row", ...value]];
+  }
+  let rows = [];
+  value.forEach((item, idx) => {
+    const label = prefix ? `${prefix}.${idx}` : String(idx);
+    if (Array.isArray(item) && Array.isArray(item[0])) {
+      rows = rows.concat(flattenRows(item, label));
+    } else {
+      rows.push([label, ...item]);
+    }
+  });
+  return rows;
+}
+
+// 根据数据类型选择渲染方式：token chip、概率条形图或矩阵表。
+// Choose rendering by data type: token chips, probability bars, or matrix table.
+function renderTable(value) {
+  if (typeof value === "string") return `<div class="token-grid"><span class="token">${esc(value)}</span></div>`;
+  if (Array.isArray(value) && value.length && typeof value[0] === "string") {
+    return `<div class="token-grid">${value.map(v => `<span class="token">${esc(v)}</span>`).join("")}</div>`;
+  }
+  if (Array.isArray(value) && value.length && typeof value[0] === "object" && !Array.isArray(value[0])) {
+    const maxProb = Math.max(...value.map(d => d.prob || 0), 0.001);
+    return `<div class="bar-list">${value.map(d => `
+      <div class="bar-row">
+        <code>${esc(d.token)}</code>
+        <div class="bar" aria-hidden="true"><span style="--w:${(d.prob || 0) / maxProb}"></span></div>
+        <span class="prob">p=${fmt(d.prob)} logit=${fmt(d.logit)}</span>
+      </div>
+    `).join("")}</div>`;
+  }
+  const rows = flattenRows(value);
+  const colCount = Math.max(...rows.map(r => r.length));
+  const headers = Array.from({ length: colCount - 1 }, (_, i) => `<th>c${i}</th>`).join("");
+  return `<div class="table-wrap"><table><thead><tr><th>row</th>${headers}</tr></thead><tbody>${
+    rows.map(row => `
+      <tr>
+        <td>${esc(row[0])}</td>
+        ${Array.from({ length: colCount - 1 }, (_, i) => `<td>${fmt(row[i + 1] ?? "")}</td>`).join("")}
+      </tr>
+    `).join("")
+  }</tbody></table></div>`;
+}
+
+// 单个 value block 既用于关键结果，也用于 calculation 内部的中间量。
+// One value block renderer is shared by key results and calculation internals.
+function renderValueBlock(v) {
+  return `
+    <section class="value-block">
+      <div class="value-head">
+        <h3>${esc(v.name)}</h3>
+        <span class="shape">${esc(shapeLabel(v.shape))}</span>
+      </div>
+      ${v.note ? `<div class="note">${esc(v.note)}</div>` : ""}
+      ${renderTable(v.value)}
+    </section>
+  `;
+}
+
+// 渲染当前步骤的公式、解释和每个中间张量。
+// Render the active step's formula, explanation, and intermediate tensors.
+function renderDetail() {
+  const step = trace.steps[active];
+  detail.innerHTML = `
+    <h2>${active + 1}. ${esc(step.title)}</h2>
+    <div class="formula"><code>${esc(step.formula)}</code></div>
+    <p>${esc(step.detail)}</p>
+    ${step.calculation && step.calculation.length ? `
+      <div class="section-label">Calculation</div>
+      <div class="calc-list">
+        ${step.calculation.map((calc, idx) => `
+          <section class="calc-block">
+            <h3>${idx + 1}. ${esc(calc.title)}</h3>
+            <div class="calc-formula"><code>${esc(calc.formula)}</code></div>
+            ${calc.detail ? `<div class="note">${esc(calc.detail)}</div>` : ""}
+            <div class="values">${calc.values.map(renderValueBlock).join("")}</div>
+          </section>
+        `).join("")}
+      </div>
+    ` : ""}
+    <div class="section-label">Key result</div>
+    <div class="values">
+      ${step.values.map(renderValueBlock).join("")}
+    </div>
+  `;
+  Array.from(stepList.querySelectorAll("button")).forEach((btn, idx) => {
+    btn.setAttribute("aria-pressed", idx === active ? "true" : "false");
+  });
+  prevBtn.disabled = active === 0;
+  nextBtn.disabled = active === trace.steps.length - 1;
+}
+
+// 步骤列表只绑定一次点击事件，active 改变后重绘详情区域。
+// The step list binds one click handler; changing active redraws the detail area.
+function renderStepList() {
+  stepList.innerHTML = trace.steps.map((step, idx) => `
+    <button type="button" aria-pressed="${idx === active}" data-idx="${idx}">
+      ${idx + 1}. ${esc(step.title)}
+    </button>
+  `).join("");
+  stepList.addEventListener("click", event => {
+    const btn = event.target.closest("button[data-idx]");
+    if (!btn) return;
+    active = Number(btn.dataset.idx);
+    renderDetail();
+  });
+}
+
+// 上一页/下一页按钮提供线性浏览路径，适合按 Transformer 流程逐步讲解。
+// Previous/next buttons provide a linear path for explaining the Transformer flow.
+prevBtn.addEventListener("click", () => {
+  active = Math.max(0, active - 1);
+  renderDetail();
+});
+nextBtn.addEventListener("click", () => {
+  active = Math.min(trace.steps.length - 1, active + 1);
+  renderDetail();
+});
+
+renderStats();
+renderStepList();
+renderDetail();
+</script>
+</body>
+</html>
